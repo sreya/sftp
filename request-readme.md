@@ -8,11 +8,11 @@ the Request as the only parameter and they each return something different.
 These 4 interfaces are enough to handle all the SFTP traffic in a simplified
 manner.
 
-The Request structure has 5 public fields which you will deal with.
+The Request structure has the following public fields:
 
 - Method (string) - string name of incoming call
 - Filepath (string) - POSIX path of file to act on
-- Flags (uint32) - 32bit bitmask value of file open/create flags
+- Flags (uint32) - file open/create flags for OPEN, attribute flags for SETSTAT
 - Attrs ([]byte) - byte string of file attribute data
 - Target (string) - target path for renames and sym-links
 
@@ -45,6 +45,52 @@ Handles "List", "Stat", "Readlink" methods. Gathers/creates FileInfo structs
 with the data on the files and returns in a list (list of 1 for Stat and
 Readlink).
 
+
+## Local filesystem handlers
+
+`NewLocalHandlers()` provides the filesystem operations used by `NewServer`
+through the request-handler interfaces. Configure relative paths with
+`WithStartDirectory` rather than maintaining another working-directory setting:
+
+```go
+handlers := sftp.NewLocalHandlers()
+server := sftp.NewRequestServer(conn, handlers, sftp.WithStartDirectory("/home/user"))
+```
+
+A caller can replace `FileGet` or `FilePut` with a wrapper that delegates to the
+original handler and observes the returned file. The other operations continue
+using the package's implementation. See `ExampleNewLocalHandlers` for a writer
+that logs close and interruption without implementing filesystem operations.
+
+Returned files implement `io.ReaderAt`, `io.WriterAt`, `io.Closer`, `FileStater`,
+and `FileSetstater`. A wrapper must forward the optional metadata interfaces to
+keep FSTAT/FSETSTAT on the open descriptor. The explicit `Fstat` and `Fsetstat` methods take priority
+when present, and an error does not fall back to the pathname. Existing custom
+handlers without these interfaces retain their path-based behavior, including
+handlers that return a plain `*os.File` with its existing `Stat` method.
+
+`Request.AttrFlags()` and `Request.Attributes()` now expose OPEN attributes
+separately from the access flags returned by `Pflags()`. This includes explicit
+creation mode `0000` and the absence of attributes. Existing manually constructed
+SETSTAT requests continue using `Flags` as their attribute mask.
+
+### Remaining differences
+
+These handlers reuse the existing filesystem operations, not the entire server
+lifecycle. `RequestServer` still normalizes paths before dispatch, which can differ
+from `NewServer` for a symlink followed by `..`. Relative symlink targets retain
+`RequestServer` semantics. The handlers expose the host filesystem and do not
+provide a chroot or sandbox.
+
+The default request-server working directory remains `/`, while an unconfigured
+`NewServer` uses the process working directory. Set `WithStartDirectory` explicitly
+when comparing the two. Windows virtual-root drive enumeration is not enabled by
+this factory.
+
+FSETSTAT size, mode, and ownership operations use the descriptor. File timestamps
+retain `NewServer`'s path fallback on platforms where the file does not implement
+`Chtimes`. Abrupt-disconnect error and cleanup behavior also remain those of
+`RequestServer`.
 
 ## TODO
 
