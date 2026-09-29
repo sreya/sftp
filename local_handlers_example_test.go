@@ -32,6 +32,17 @@ func (f *loggingLocalFile) TransferError(err error) {
 	log.Printf("interrupted file %q: %v", f.path, err)
 }
 
+type loggingLocalReader struct{ sftp.FileReader }
+
+func (h loggingLocalReader) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	f, err := h.FileReader.Fileread(r)
+	if err != nil {
+		log.Printf("open file %q: %v", r.Filepath, err)
+		return nil, err
+	}
+	return &loggingLocalFile{observedLocalFile: f.(observedLocalFile), path: r.Filepath}, nil
+}
+
 type loggingLocalWriter struct{ sftp.FileWriter }
 
 func (h loggingLocalWriter) Filewrite(r *sftp.Request) (io.WriterAt, error) {
@@ -54,6 +65,7 @@ func (h loggingLocalWriter) OpenFile(r *sftp.Request) (sftp.WriterAtReaderAt, er
 
 func ExampleNewLocalHandlers() {
 	handlers := sftp.NewLocalHandlers()
+	handlers.FileGet = loggingLocalReader{FileReader: handlers.FileGet}
 	handlers.FilePut = loggingLocalWriter{FileWriter: handlers.FilePut}
 
 	// Pass handlers to NewRequestServer with an established SSH channel:

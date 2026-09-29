@@ -59,8 +59,8 @@ server := sftp.NewRequestServer(conn, handlers, sftp.WithStartDirectory("/home/u
 
 A caller can replace `FileGet` or `FilePut` with a wrapper that delegates to the
 original handler and observes the returned file. The other operations continue
-using the package's implementation. See `ExampleNewLocalHandlers` for a writer
-that logs close and interruption without implementing filesystem operations.
+using the package's implementation. See `ExampleNewLocalHandlers` for wrappers
+that log close and interruption without implementing filesystem operations.
 
 Returned files implement `io.ReaderAt`, `io.WriterAt`, `io.Closer`, `FileStater`,
 and `FileSetstater`. A wrapper must forward the optional metadata interfaces to
