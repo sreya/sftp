@@ -71,7 +71,6 @@ func TestRequestAttributesEmpty(t *testing.T) {
 }
 
 func TestRequestOpenAttributes(t *testing.T) {
-	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		flags uint32
@@ -84,7 +83,6 @@ func TestRequestOpenAttributes(t *testing.T) {
 			attrs: FileStat{Size: 123, UID: 4, GID: 5, Mode: 0640, Atime: 10, Mtime: 20}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			access := uint32(sshFxfRead | sshFxfWrite | sshFxfAppend | sshFxfCreat)
 			r := requestFromPacket(context.Background(), &sshFxpOpenPacket{
 				Path: "file", Pflags: access, Flags: tc.flags,
@@ -102,7 +100,6 @@ func TestRequestOpenAttributes(t *testing.T) {
 }
 
 func TestRequestManualAttributesCompatibility(t *testing.T) {
-	t.Parallel()
 	attrs := FileStat{Mode: 0600}
 	r := &Request{Method: "Setstat", Flags: sshFileXferAttrPermissions,
 		Attrs: marshalFileStat(nil, sshFileXferAttrPermissions, &attrs)}

@@ -516,6 +516,117 @@ func TestRequestFsetstat(t *testing.T) {
 	checkRequestServerAllocator(t, p)
 }
 
+type fstaterFile struct {
+	*os.File
+	err          error
+	fsetstats    int
+	fsetstatMode os.FileMode
+}
+
+func (f *fstaterFile) Fstat() (os.FileInfo, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.File.Stat()
+}
+
+func (f *fstaterFile) Fsetstat(r *Request) error {
+	f.fsetstats++
+	f.fsetstatMode = r.Attributes().FileMode()
+	return f.err
+}
+
+// fstaterHandlers returns the same open file for every open. It counts the
+// path-based Stat and Setstat calls that FSTAT and FSETSTAT fall back to.
+type fstaterHandlers struct {
+	file        *fstaterFile
+	handle      any
+	stats       int
+	setstats    int
+	setstatMode os.FileMode
+}
+
+func (h *fstaterHandlers) Fileread(*Request) (io.ReaderAt, error) {
+	return h.handle.(io.ReaderAt), nil
+}
+
+func (h *fstaterHandlers) Filewrite(*Request) (io.WriterAt, error) {
+	return h.handle.(io.WriterAt), nil
+}
+
+func (h *fstaterHandlers) OpenFile(*Request) (WriterAtReaderAt, error) {
+	return h.handle.(WriterAtReaderAt), nil
+}
+
+func (h *fstaterHandlers) Filecmd(r *Request) error {
+	h.setstats++
+	h.setstatMode = r.Attributes().FileMode()
+	return nil
+}
+
+func (h *fstaterHandlers) Filelist(*Request) (ListerAt, error) {
+	h.stats++
+	info, err := h.file.File.Stat()
+	return listerat{info}, err
+}
+
+func TestRequestFstater(t *testing.T) {
+	// readWriteCloser hides the Fstat and Fsetstat methods.
+	type readWriteCloser struct {
+		WriterAtReaderAt
+		io.Closer
+	}
+	tests := []struct {
+		name     string
+		handle   func(f *fstaterFile) any
+		err      error
+		fallback bool
+	}{
+		{name: "fstater", handle: func(f *fstaterFile) any { return f }},
+		{name: "fstater error", handle: func(f *fstaterFile) any { return f }, err: os.ErrPermission},
+		{name: "without fstater", handle: func(f *fstaterFile) any { return readWriteCloser{f, f} }, fallback: true},
+		// *os.File has a Stat method but not Fstat.
+		{name: "os.File", handle: func(f *fstaterFile) any { return f.File }, fallback: true},
+	}
+	for _, flags := range []int{os.O_RDONLY, os.O_WRONLY, os.O_RDWR} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s flags %d", tt.name, flags), func(t *testing.T) {
+				file, err := os.CreateTemp(t.TempDir(), "file")
+				require.NoError(t, err)
+				defer file.Close()
+				h := &fstaterHandlers{file: &fstaterFile{File: file, err: tt.err}}
+				h.handle = tt.handle(h.file)
+				p := clientRequestServerPairWithHandlers(t, Handlers{h, h, h, h})
+				defer p.Close()
+
+				f, err := p.cli.OpenFile("/file", flags)
+				require.NoError(t, err)
+				_, statErr := f.Stat()
+				chmodErr := f.Chmod(0o600)
+				if tt.err != nil {
+					assert.Error(t, statErr)
+					assert.Error(t, chmodErr)
+				} else {
+					assert.NoError(t, statErr)
+					assert.NoError(t, chmodErr)
+				}
+				if tt.fallback {
+					assert.Equal(t, 1, h.stats)
+					assert.Equal(t, 1, h.setstats)
+					assert.Equal(t, os.FileMode(0o600), h.setstatMode)
+					assert.Zero(t, h.file.fsetstats)
+				} else {
+					assert.Zero(t, h.stats)
+					assert.Zero(t, h.setstats)
+					assert.Equal(t, 1, h.file.fsetstats)
+					assert.Equal(t, os.FileMode(0o600), h.file.fsetstatMode)
+				}
+				checkRequestServerAllocator(t, p)
+			})
+		}
+	}
+}
+
 func TestRequestStatFail(t *testing.T) {
 	p := clientRequestServerPair(t)
 	defer p.Close()

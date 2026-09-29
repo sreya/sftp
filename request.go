@@ -90,8 +90,8 @@ func (s *state) getAllReaderWriters() (io.ReaderAt, io.WriterAt, WriterAtReaderA
 	return s.readerAt, s.writerAt, s.writerAtReaderAt
 }
 
-// metadataHandle returns the object supplied for an open handle. Wrappers
-// retain descriptor metadata behavior by forwarding FileStater/FileSetstater.
+// metadataHandle returns the file or ListerAt that the handlers returned for
+// an open handle, for FSTAT and FSETSTAT to check for Fstater and Fsetstater.
 func (r *Request) metadataHandle() any {
 	reader, writer, both := r.getAllReaderWriters()
 	switch {

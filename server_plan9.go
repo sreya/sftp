@@ -5,13 +5,9 @@ import (
 	"path/filepath"
 )
 
-func (s *Server) toLocalPath(p string) string {
-	return localPath(s.workDir, s.winRoot, p)
-}
-
-func localPath(workDir string, winRoot bool, p string) string {
-	if workDir != "" && !path.IsAbs(p) {
-		p = path.Join(workDir, p)
+func (lfs localFS) toLocalPath(p string) string {
+	if lfs.workDir != "" && !path.IsAbs(p) {
+		p = path.Join(lfs.workDir, p)
 	}
 
 	lp := filepath.FromSlash(p)

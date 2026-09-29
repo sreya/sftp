@@ -12,20 +12,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func (s *Server) toLocalPath(p string) string {
-	return localPath(s.workDir, s.winRoot, p)
-}
-
-func localPath(workDir string, winRoot bool, p string) string {
-	if workDir != "" && !path.IsAbs(p) {
-		p = path.Join(workDir, p)
+func (lfs localFS) toLocalPath(p string) string {
+	if lfs.workDir != "" && !path.IsAbs(p) {
+		p = path.Join(lfs.workDir, p)
 	}
 
 	lp := filepath.FromSlash(p)
 
 	if path.IsAbs(p) { // starts with '/'
-		if len(p) == 1 && winRoot {
-			return `\\.\` // for openfile
+		if len(p) == 1 && lfs.winRoot {
+			return `\\.\` // for openLocal
 		}
 
 		tmp := lp
@@ -49,7 +45,7 @@ func localPath(workDir string, winRoot bool, p string) string {
 			return tmp
 		}
 
-		if winRoot {
+		if lfs.winRoot {
 			// Make it so that "/Windows" is not found, and "/c:/Windows" has to be used
 			return `\\.\` + tmp
 		}
@@ -157,12 +153,8 @@ func (f *winRoot) Close() error {
 	return nil
 }
 
-func (s *Server) openfile(path string, flag int, mode fs.FileMode) (file, error) {
-	return openLocalOSFile(path, flag, mode, s.winRoot)
-}
-
-func openLocalOSFile(path string, flag int, mode fs.FileMode, winRoot bool) (file, error) {
-	if path == `\\.\` && winRoot {
+func (lfs localFS) openLocal(path string, flag int, mode fs.FileMode) (file, error) {
+	if path == `\\.\` && lfs.winRoot {
 		return newWinRoot()
 	}
 	return os.OpenFile(path, flag, mode)
@@ -178,7 +170,7 @@ func (w *winRootFileInfo) Size() int64        { return 0 }
 func (w *winRootFileInfo) Mode() fs.FileMode  { return fs.ModeDir | 0555 } // read+execute for all
 func (w *winRootFileInfo) ModTime() time.Time { return w.modTime }
 func (w *winRootFileInfo) IsDir() bool        { return true }
-func (w *winRootFileInfo) Sys() any           { return nil }
+func (w *winRootFileInfo) Sys() any   { return nil }
 
 // Create a new root FileInfo
 var rootFileInfo = &winRootFileInfo{
@@ -186,23 +178,15 @@ var rootFileInfo = &winRootFileInfo{
 	modTime: time.Now(),
 }
 
-func (s *Server) lstat(name string) (os.FileInfo, error) {
-	return lstatLocalFile(name, s.winRoot)
-}
-
-func lstatLocalFile(name string, winRoot bool) (os.FileInfo, error) {
-	if name == `\\.\` && winRoot {
+func (lfs localFS) lstatLocal(name string) (os.FileInfo, error) {
+	if name == `\\.\` && lfs.winRoot {
 		return rootFileInfo, nil
 	}
 	return os.Lstat(name)
 }
 
-func (s *Server) stat(name string) (os.FileInfo, error) {
-	return statLocalFile(name, s.winRoot)
-}
-
-func statLocalFile(name string, winRoot bool) (os.FileInfo, error) {
-	if name == `\\.\` && winRoot {
+func (lfs localFS) statLocal(name string) (os.FileInfo, error) {
+	if name == `\\.\` && lfs.winRoot {
 		return rootFileInfo, nil
 	}
 	return os.Stat(name)

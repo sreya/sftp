@@ -48,23 +48,6 @@ type OpenFileWriter interface {
 	OpenFile(*Request) (WriterAtReaderAt, error)
 }
 
-// FileStater is an optional interface for open file and directory handles.
-// FSTAT uses Fstat instead of looking up the handle's original pathname. Errors
-// are returned to the client without falling back to the pathname handler.
-// The explicit method leaves existing handles that only implement os.File.Stat
-// using their FileLister, preserving custom metadata policies.
-type FileStater interface {
-	Fstat() (os.FileInfo, error)
-}
-
-// FileSetstater is an optional interface for open file and directory handles.
-// FSETSTAT passes a Setstat request containing its attribute flags and values.
-// Errors are returned without falling back to the pathname handler because an
-// operation may already have partially changed the open file.
-type FileSetstater interface {
-	Fsetstat(*Request) error
-}
-
 // FileCmder should return an error
 // Note in cases of an error, the error text will be sent to the client.
 // Called for Methods: Setstat, Rename, Rmdir, Mkdir, Link, Symlink, Remove
@@ -173,4 +156,23 @@ type ListerAt interface {
 // with the request still open
 type TransferError interface {
 	TransferError(err error)
+}
+
+// Fstater is an optional interface that a file or ListerAt returned by the
+// handlers can implement. If implemented, FSTAT on its handle calls Fstat
+// instead of FileLister with the path the handle was opened with. Handles
+// that only have a Stat method, such as *os.File, keep using the FileLister.
+// An error is returned to the client without falling back to the FileLister.
+type Fstater interface {
+	Fstat() (os.FileInfo, error)
+}
+
+// Fsetstater is an optional interface that a file or ListerAt returned by the
+// handlers can implement. If implemented, FSETSTAT on its handle calls
+// Fsetstat instead of FileCmder with the path the handle was opened with.
+// The Request has Method "Setstat", and its Flags and Attrs hold the
+// attributes to set. An error is returned to the client without falling
+// back to the FileCmder.
+type Fsetstater interface {
+	Fsetstat(*Request) error
 }

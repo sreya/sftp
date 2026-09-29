@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -33,20 +34,30 @@ type file interface {
 	Close() error
 }
 
+// localFS implements the local filesystem operations shared by Server and the
+// request handlers returned by NewLocalHandlers, so each operation has a single
+// implementation. Methods take SFTP paths and convert them with toLocalPath.
+// The platform-specific *Local methods take paths that are already converted.
+type localFS struct {
+	workDir string
+	winRoot bool
+}
+
 // Server is an SSH File Transfer Protocol (sftp) server.
 // This is intended to provide the sftp subsystem to an ssh server daemon.
 // This implementation currently supports most of sftp server protocol version 3,
 // as specified at https://filezilla-project.org/specs/draft-ietf-secsh-filexfer-02.txt
 type Server struct {
 	*serverConn
+	// Server handles packets, handles, and lifecycle. localFS performs the
+	// filesystem operations.
+	localFS
 	debugStream   io.Writer
 	readOnly      bool
 	pktMgr        *packetManager
 	openFiles     map[string]file
 	openFilesLock sync.RWMutex
 	handleCount   int
-	workDir       string
-	winRoot       bool
 	maxTxPacket   uint32
 }
 
@@ -226,7 +237,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpStatPacket:
 		// stat the requested file
-		info, err := os.Stat(s.toLocalPath(p.Path))
+		info, err := s.stat(p.Path)
 		rpkt = &sshFxpStatResponse{
 			ID:   p.ID,
 			info: info,
@@ -236,7 +247,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpLstatPacket:
 		// stat the requested file
-		info, err := s.lstat(s.toLocalPath(p.Path))
+		info, err := s.lstat(p.Path)
 		rpkt = &sshFxpStatResponse{
 			ID:   p.ID,
 			info: info,
@@ -259,25 +270,24 @@ func handlePacket(s *Server, p orderedRequest) error {
 			rpkt = statusFromError(p.ID, err)
 		}
 	case *sshFxpMkdirPacket:
-		// TODO FIXME: ignore flags field
-		err := os.Mkdir(s.toLocalPath(p.Path), 0o755)
+		err := s.mkdir(p.Path)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRmdirPacket:
-		err := os.Remove(s.toLocalPath(p.Path))
+		err := s.remove(p.Path)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRemovePacket:
-		err := os.Remove(s.toLocalPath(p.Filename))
+		err := s.remove(p.Filename)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRenamePacket:
-		err := os.Rename(s.toLocalPath(p.Oldpath), s.toLocalPath(p.Newpath))
+		err := s.rename(p.Oldpath, p.Newpath)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpSymlinkPacket:
-		err := os.Symlink(s.toLocalPath(p.Targetpath), s.toLocalPath(p.Linkpath))
+		err := s.symlink(p.Targetpath, p.Linkpath)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpClosePacket:
 		rpkt = statusFromError(p.ID, s.closeHandle(p.Handle))
 	case *sshFxpReadlinkPacket:
-		f, err := os.Readlink(s.toLocalPath(p.Path))
+		f, err := s.readlink(p.Path)
 		rpkt = &sshFxpNamePacket{
 			ID: p.ID,
 			NameAttrs: []*sshFxpNameAttr{
@@ -308,20 +318,11 @@ func handlePacket(s *Server, p orderedRequest) error {
 			rpkt = statusFromError(p.ID, err)
 		}
 	case *sshFxpOpendirPacket:
-		lp := s.toLocalPath(p.Path)
-
-		if stat, err := s.stat(lp); err != nil {
+		f, err := s.opendir(p.Path)
+		if err != nil {
 			rpkt = statusFromError(p.ID, err)
-		} else if !stat.IsDir() {
-			rpkt = statusFromError(p.ID, &os.PathError{
-				Path: lp, Err: syscall.ENOTDIR,
-			})
 		} else {
-			rpkt = (&sshFxpOpenPacket{
-				ID:     p.ID,
-				Path:   p.Path,
-				Pflags: sshFxfRead,
-			}).respond(s)
+			rpkt = &sshFxpHandlePacket{ID: p.ID, Handle: s.nextHandle(f)}
 		}
 	case *sshFxpReadPacket:
 		var err error = EBADF
@@ -478,12 +479,54 @@ func (p *sshFxpOpenPacket) hasPflags(flags ...uint32) bool {
 }
 
 func (p *sshFxpOpenPacket) respond(svr *Server) responsePacket {
-	f, err := openLocalFile(svr.toLocalPath(p.Path), p.Pflags, p.Flags, p.Attrs, svr.winRoot)
+	f, err := svr.open(p.Path, p.Pflags, p.Flags, p.Attrs)
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
+
 	handle := svr.nextHandle(f)
 	return &sshFxpHandlePacket{ID: p.ID, Handle: handle}
+}
+
+// open implements SSH_FXP_OPEN.
+func (lfs localFS) open(p string, pflags, attrFlags uint32, attrs any) (file, error) {
+	var osFlags int
+	if pflags&(sshFxfRead|sshFxfWrite) == sshFxfRead|sshFxfWrite {
+		osFlags |= os.O_RDWR
+	} else if pflags&sshFxfWrite != 0 {
+		osFlags |= os.O_WRONLY
+	} else if pflags&sshFxfRead != 0 {
+		osFlags |= os.O_RDONLY
+	} else {
+		// how are they opening?
+		return nil, syscall.EINVAL
+	}
+
+	// Don't use O_APPEND flag as it conflicts with WriteAt.
+	// The sshFxfAppend flag is a no-op here as the client sends the offsets.
+
+	if pflags&sshFxfCreat != 0 {
+		osFlags |= os.O_CREATE
+	}
+	if pflags&sshFxfTrunc != 0 {
+		osFlags |= os.O_TRUNC
+	}
+	if pflags&sshFxfExcl != 0 {
+		osFlags |= os.O_EXCL
+	}
+
+	mode := os.FileMode(0o644)
+	// Like OpenSSH, we only handle permissions here, and only when the file is being created.
+	// Otherwise, the permissions are ignored.
+	if attrFlags&sshFileXferAttrPermissions != 0 {
+		fs, err := fileStatFromAttrs(attrFlags, attrs)
+		if err != nil {
+			return nil, err
+		}
+		mode = fs.FileMode() & os.ModePerm
+	}
+
+	return lfs.openLocal(lfs.toLocalPath(p), osFlags, mode)
 }
 
 func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
@@ -511,13 +554,31 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 }
 
 func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
-	name := svr.toLocalPath(p.Path)
-	debug("setstat name %q", name)
-	fs, err := p.unmarshalFileStat(p.Flags)
-	if err == nil {
-		err = setLocalPathStat(name, p.Flags, fs)
+	return statusFromError(p.ID, svr.setstat(p.Path, p.Flags, p.Attrs))
+}
+
+// setstat implements SSH_FXP_SETSTAT.
+func (lfs localFS) setstat(p string, flags uint32, attrs any) error {
+	path := lfs.toLocalPath(p)
+
+	debug("setstat name %q", path)
+
+	fs, err := fileStatFromAttrs(flags, attrs)
+
+	if err == nil && (flags&sshFileXferAttrSize) != 0 {
+		err = os.Truncate(path, int64(fs.Size))
 	}
-	return statusFromError(p.ID, err)
+	if err == nil && (flags&sshFileXferAttrPermissions) != 0 {
+		err = os.Chmod(path, fs.FileMode())
+	}
+	if err == nil && (flags&sshFileXferAttrUIDGID) != 0 {
+		err = os.Chown(path, int(fs.UID), int(fs.GID))
+	}
+	if err == nil && (flags&sshFileXferAttrACmodTime) != 0 {
+		err = os.Chtimes(path, fs.AccessTime(), fs.ModTime())
+	}
+
+	return err
 }
 
 func (p *sshFxpFsetstatPacket) respond(svr *Server) responsePacket {
@@ -525,12 +586,99 @@ func (p *sshFxpFsetstatPacket) respond(svr *Server) responsePacket {
 	if !ok {
 		return statusFromError(p.ID, EBADF)
 	}
-	debug("fsetstat name %q", f.Name())
-	fs, err := p.unmarshalFileStat(p.Flags)
-	if err == nil {
-		err = setLocalFileStat(f, p.Flags, fs)
+
+	return statusFromError(p.ID, fsetstat(f, p.Flags, p.Attrs))
+}
+
+// fsetstat implements SSH_FXP_FSETSTAT on an open file.
+func fsetstat(f file, flags uint32, attrs any) error {
+	path := f.Name()
+
+	debug("fsetstat name %q", path)
+
+	fs, err := fileStatFromAttrs(flags, attrs)
+
+	if err == nil && (flags&sshFileXferAttrSize) != 0 {
+		err = f.Truncate(int64(fs.Size))
 	}
-	return statusFromError(p.ID, err)
+	if err == nil && (flags&sshFileXferAttrPermissions) != 0 {
+		err = f.Chmod(fs.FileMode())
+	}
+	if err == nil && (flags&sshFileXferAttrUIDGID) != 0 {
+		err = f.Chown(int(fs.UID), int(fs.GID))
+	}
+	if err == nil && (flags&sshFileXferAttrACmodTime) != 0 {
+		type chtimer interface {
+			Chtimes(atime, mtime time.Time) error
+		}
+
+		switch f := any(f).(type) {
+		case chtimer:
+			// future-compatible, for when/if *os.File supports Chtimes.
+			err = f.Chtimes(fs.AccessTime(), fs.ModTime())
+		default:
+			err = os.Chtimes(path, fs.AccessTime(), fs.ModTime())
+		}
+	}
+
+	return err
+}
+
+// stat implements SSH_FXP_STAT. Unlike lstat and opendir, it does not use
+// statLocal, so it does not special-case the Windows virtual root.
+func (lfs localFS) stat(p string) (os.FileInfo, error) {
+	return os.Stat(lfs.toLocalPath(p))
+}
+
+// lstat implements SSH_FXP_LSTAT.
+func (lfs localFS) lstat(p string) (os.FileInfo, error) {
+	return lfs.lstatLocal(lfs.toLocalPath(p))
+}
+
+// opendir implements SSH_FXP_OPENDIR.
+func (lfs localFS) opendir(p string) (file, error) {
+	lp := lfs.toLocalPath(p)
+
+	if stat, err := lfs.statLocal(lp); err != nil {
+		return nil, err
+	} else if !stat.IsDir() {
+		return nil, &os.PathError{
+			Path: lp, Err: syscall.ENOTDIR,
+		}
+	}
+
+	return lfs.open(p, sshFxfRead, 0, nil)
+}
+
+// mkdir implements SSH_FXP_MKDIR.
+func (lfs localFS) mkdir(p string) error {
+	// TODO FIXME: ignore flags field
+	return os.Mkdir(lfs.toLocalPath(p), 0o755)
+}
+
+// remove implements SSH_FXP_REMOVE and SSH_FXP_RMDIR.
+func (lfs localFS) remove(p string) error {
+	return os.Remove(lfs.toLocalPath(p))
+}
+
+// rename implements SSH_FXP_RENAME and posix-rename@openssh.com.
+func (lfs localFS) rename(oldpath, newpath string) error {
+	return os.Rename(lfs.toLocalPath(oldpath), lfs.toLocalPath(newpath))
+}
+
+// link implements hardlink@openssh.com.
+func (lfs localFS) link(oldpath, newpath string) error {
+	return os.Link(lfs.toLocalPath(oldpath), lfs.toLocalPath(newpath))
+}
+
+// symlink implements SSH_FXP_SYMLINK.
+func (lfs localFS) symlink(targetpath, linkpath string) error {
+	return os.Symlink(lfs.toLocalPath(targetpath), lfs.toLocalPath(linkpath))
+}
+
+// readlink implements SSH_FXP_READLINK.
+func (lfs localFS) readlink(p string) (string, error) {
+	return os.Readlink(lfs.toLocalPath(p))
 }
 
 func statusFromError(id uint32, err error) *sshFxpStatusPacket {

@@ -796,7 +796,9 @@ func (p *sshFxpOpenPacket) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func openFileAttributes(flags uint32, attrs any) (*FileStat, error) {
+// fileStatFromAttrs decodes the attributes carried by OPEN, SETSTAT, and
+// FSETSTAT requests.
+func fileStatFromAttrs(flags uint32, attrs any) (*FileStat, error) {
 	switch attrs := attrs.(type) {
 	case *FileStat:
 		return attrs, nil
@@ -1096,18 +1098,6 @@ func (p *sshFxpSetstatPacket) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func (p *sshFxpSetstatPacket) unmarshalFileStat(flags uint32) (*FileStat, error) {
-	switch attrs := p.Attrs.(type) {
-	case *FileStat:
-		return attrs, nil
-	case []byte:
-		fs, _, err := unmarshalFileStat(flags, attrs)
-		return fs, err
-	default:
-		return nil, fmt.Errorf("invalid type in unmarshalFileStat: %T", attrs)
-	}
-}
-
 func (p *sshFxpFsetstatPacket) UnmarshalBinary(b []byte) error {
 	var err error
 	if p.ID, b, err = unmarshalUint32Safe(b); err != nil {
@@ -1119,18 +1109,6 @@ func (p *sshFxpFsetstatPacket) UnmarshalBinary(b []byte) error {
 	}
 	p.Attrs = b
 	return nil
-}
-
-func (p *sshFxpFsetstatPacket) unmarshalFileStat(flags uint32) (*FileStat, error) {
-	switch attrs := p.Attrs.(type) {
-	case *FileStat:
-		return attrs, nil
-	case []byte:
-		fs, _, err := unmarshalFileStat(flags, attrs)
-		return fs, err
-	default:
-		return nil, fmt.Errorf("invalid type in unmarshalFileStat: %T", attrs)
-	}
 }
 
 type sshFxpHandlePacket struct {
@@ -1394,7 +1372,7 @@ func (p *sshFxpExtendedPacketPosixRename) UnmarshalBinary(b []byte) error {
 }
 
 func (p *sshFxpExtendedPacketPosixRename) respond(s *Server) responsePacket {
-	err := os.Rename(s.toLocalPath(p.Oldpath), s.toLocalPath(p.Newpath))
+	err := s.rename(p.Oldpath, p.Newpath)
 	return statusFromError(p.ID, err)
 }
 
@@ -1423,6 +1401,6 @@ func (p *sshFxpExtendedPacketHardlink) UnmarshalBinary(b []byte) error {
 }
 
 func (p *sshFxpExtendedPacketHardlink) respond(s *Server) responsePacket {
-	err := os.Link(s.toLocalPath(p.Oldpath), s.toLocalPath(p.Newpath))
+	err := s.link(p.Oldpath, p.Newpath)
 	return statusFromError(p.ID, err)
 }
