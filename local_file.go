@@ -1,7 +1,6 @@
 package sftp
 
 import (
-	"fmt"
 	"os"
 	"syscall"
 	"time"
@@ -52,18 +51,6 @@ func openLocalFile(name string, pflags, attrFlags uint32, attrs any, winRoot boo
 	}
 
 	return f, nil
-}
-
-func openFileAttributes(flags uint32, attrs any) (*FileStat, error) {
-	switch attrs := attrs.(type) {
-	case *FileStat:
-		return attrs, nil
-	case []byte:
-		stat, _, err := unmarshalFileStat(flags, attrs)
-		return stat, err
-	default:
-		return nil, fmt.Errorf("invalid type in unmarshalFileStat: %T", attrs)
-	}
 }
 
 func setLocalPathStat(name string, flags uint32, fs *FileStat) (err error) {

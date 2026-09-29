@@ -796,8 +796,8 @@ func (p *sshFxpOpenPacket) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func (p *sshFxpOpenPacket) unmarshalFileStat(flags uint32) (*FileStat, error) {
-	switch attrs := p.Attrs.(type) {
+func openFileAttributes(flags uint32, attrs any) (*FileStat, error) {
+	switch attrs := attrs.(type) {
 	case *FileStat:
 		return attrs, nil
 	case []byte:
