@@ -6,8 +6,12 @@ import (
 )
 
 func (s *Server) toLocalPath(p string) string {
-	if s.workDir != "" && !path.IsAbs(p) {
-		p = path.Join(s.workDir, p)
+	return localPath(s.workDir, s.winRoot, p)
+}
+
+func localPath(workDir string, winRoot bool, p string) string {
+	if workDir != "" && !path.IsAbs(p) {
+		p = path.Join(workDir, p)
 	}
 
 	lp := filepath.FromSlash(p)

@@ -13,14 +13,18 @@ import (
 )
 
 func (s *Server) toLocalPath(p string) string {
-	if s.workDir != "" && !path.IsAbs(p) {
-		p = path.Join(s.workDir, p)
+	return localPath(s.workDir, s.winRoot, p)
+}
+
+func localPath(workDir string, winRoot bool, p string) string {
+	if workDir != "" && !path.IsAbs(p) {
+		p = path.Join(workDir, p)
 	}
 
 	lp := filepath.FromSlash(p)
 
 	if path.IsAbs(p) { // starts with '/'
-		if len(p) == 1 && s.winRoot {
+		if len(p) == 1 && winRoot {
 			return `\\.\` // for openfile
 		}
 
@@ -45,7 +49,7 @@ func (s *Server) toLocalPath(p string) string {
 			return tmp
 		}
 
-		if s.winRoot {
+		if winRoot {
 			// Make it so that "/Windows" is not found, and "/c:/Windows" has to be used
 			return `\\.\` + tmp
 		}
@@ -154,7 +158,11 @@ func (f *winRoot) Close() error {
 }
 
 func (s *Server) openfile(path string, flag int, mode fs.FileMode) (file, error) {
-	if path == `\\.\` && s.winRoot {
+	return openLocalOSFile(path, flag, mode, s.winRoot)
+}
+
+func openLocalOSFile(path string, flag int, mode fs.FileMode, winRoot bool) (file, error) {
+	if path == `\\.\` && winRoot {
 		return newWinRoot()
 	}
 	return os.OpenFile(path, flag, mode)
@@ -170,7 +178,7 @@ func (w *winRootFileInfo) Size() int64        { return 0 }
 func (w *winRootFileInfo) Mode() fs.FileMode  { return fs.ModeDir | 0555 } // read+execute for all
 func (w *winRootFileInfo) ModTime() time.Time { return w.modTime }
 func (w *winRootFileInfo) IsDir() bool        { return true }
-func (w *winRootFileInfo) Sys() any   { return nil }
+func (w *winRootFileInfo) Sys() any           { return nil }
 
 // Create a new root FileInfo
 var rootFileInfo = &winRootFileInfo{
@@ -179,14 +187,22 @@ var rootFileInfo = &winRootFileInfo{
 }
 
 func (s *Server) lstat(name string) (os.FileInfo, error) {
-	if name == `\\.\` && s.winRoot {
+	return lstatLocalFile(name, s.winRoot)
+}
+
+func lstatLocalFile(name string, winRoot bool) (os.FileInfo, error) {
+	if name == `\\.\` && winRoot {
 		return rootFileInfo, nil
 	}
 	return os.Lstat(name)
 }
 
 func (s *Server) stat(name string) (os.FileInfo, error) {
-	if name == `\\.\` && s.winRoot {
+	return statLocalFile(name, s.winRoot)
+}
+
+func statLocalFile(name string, winRoot bool) (os.FileInfo, error) {
+	if name == `\\.\` && winRoot {
 		return rootFileInfo, nil
 	}
 	return os.Stat(name)
