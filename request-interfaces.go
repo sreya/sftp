@@ -48,6 +48,21 @@ type OpenFileWriter interface {
 	OpenFile(*Request) (WriterAtReaderAt, error)
 }
 
+// FileStater is an optional interface for open file and directory handles.
+// FSTAT uses Stat instead of looking up the handle's original pathname. Errors
+// are returned to the client without falling back to the pathname handler.
+type FileStater interface {
+	Stat() (os.FileInfo, error)
+}
+
+// FileSetstater is an optional interface for open file and directory handles.
+// FSETSTAT passes a Setstat request containing its attribute flags and values.
+// Errors are returned without falling back to the pathname handler because an
+// operation may already have partially changed the open file.
+type FileSetstater interface {
+	Setstat(*Request) error
+}
+
 // FileCmder should return an error
 // Note in cases of an error, the error text will be sent to the client.
 // Called for Methods: Setstat, Rename, Rmdir, Mkdir, Link, Symlink, Remove

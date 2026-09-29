@@ -273,6 +273,13 @@ func (rs *RequestServer) packetWorker(ctx context.Context, pktChan chan orderedR
 			request, ok := rs.getRequest(handle)
 			if !ok {
 				rpkt = statusFromError(pkt.ID, EBADF)
+			} else if file, ok := request.metadataHandle().(FileStater); ok {
+				info, err := file.Stat()
+				if err != nil {
+					rpkt = statusFromError(pkt.ID, err)
+				} else {
+					rpkt = &sshFxpStatResponse{ID: pkt.ID, info: info}
+				}
 			} else {
 				request = &Request{
 					Method:   "Stat",
@@ -286,11 +293,18 @@ func (rs *RequestServer) packetWorker(ctx context.Context, pktChan chan orderedR
 			if !ok {
 				rpkt = statusFromError(pkt.ID, EBADF)
 			} else {
-				request = &Request{
+				attrs := &Request{
 					Method:   "Setstat",
 					Filepath: cleanPathWithBase(rs.startDirectory, request.Filepath),
+					Flags:    pkt.Flags,
+					Attrs:    pkt.Attrs.([]byte),
+					ctx:      request.Context(),
 				}
-				rpkt = request.call(rs.Handlers, pkt, rs.pktMgr.alloc, orderID, rs.maxTxPacket)
+				if file, ok := request.metadataHandle().(FileSetstater); ok {
+					rpkt = statusFromError(pkt.ID, file.Setstat(attrs))
+				} else {
+					rpkt = attrs.call(rs.Handlers, pkt, rs.pktMgr.alloc, orderID, rs.maxTxPacket)
+				}
 			}
 		case *sshFxpExtendedPacketPosixRename:
 			request := &Request{
