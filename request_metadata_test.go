@@ -17,14 +17,14 @@ type metadataFile struct {
 	attrs               *FileStat
 }
 
-func (f *metadataFile) Stat() (os.FileInfo, error) {
+func (f *metadataFile) Fstat() (os.FileInfo, error) {
 	if f.statErr != nil {
 		return nil, f.statErr
 	}
 	return f.File.Stat()
 }
 
-func (f *metadataFile) Setstat(r *Request) error {
+func (f *metadataFile) Fsetstat(r *Request) error {
 	f.setstatCalls++
 	f.attrs = r.Attributes()
 	return f.setstatErr
@@ -39,6 +39,7 @@ type metadataIOOnly struct {
 type metadataHandlers struct {
 	file                    *metadataFile
 	descriptor              bool
+	plainOSFile             bool
 	statCalls, setstatCalls int
 	fallbackAttributes      *FileStat
 }
@@ -48,6 +49,9 @@ func (h *metadataHandlers) open() interface {
 	io.WriterAt
 	io.Closer
 } {
+	if h.plainOSFile {
+		return h.file.File
+	}
 	if h.descriptor {
 		return h.file
 	}
@@ -99,13 +103,14 @@ func TestRequestDescriptorMetadata(t *testing.T) {
 				{name: "Descriptor", descriptor: true},
 				{name: "DescriptorError", descriptor: true, err: os.ErrPermission},
 				{name: "LegacyFallback"},
+				{name: "OSFileLegacyFallback"},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 					file, err := os.CreateTemp(t.TempDir(), "file")
 					require.NoError(t, err)
 					t.Cleanup(func() { _ = file.Close() })
-					h := &metadataHandlers{file: &metadataFile{File: file, statErr: tc.err, setstatErr: tc.err}, descriptor: tc.descriptor}
+					h := &metadataHandlers{file: &metadataFile{File: file, statErr: tc.err, setstatErr: tc.err}, descriptor: tc.descriptor, plainOSFile: tc.name == "OSFileLegacyFallback"}
 					client := newLocalRequestTestClient(t, Handlers{h, h, h, h})
 					remote, err := client.OpenFile("file", access.flags)
 					require.NoError(t, err)

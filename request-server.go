@@ -274,7 +274,7 @@ func (rs *RequestServer) packetWorker(ctx context.Context, pktChan chan orderedR
 			if !ok {
 				rpkt = statusFromError(pkt.ID, EBADF)
 			} else if file, ok := request.metadataHandle().(FileStater); ok {
-				info, err := file.Stat()
+				info, err := file.Fstat()
 				if err != nil {
 					rpkt = statusFromError(pkt.ID, err)
 				} else {
@@ -301,7 +301,7 @@ func (rs *RequestServer) packetWorker(ctx context.Context, pktChan chan orderedR
 					ctx:      request.Context(),
 				}
 				if file, ok := request.metadataHandle().(FileSetstater); ok {
-					rpkt = statusFromError(pkt.ID, file.Setstat(attrs))
+					rpkt = statusFromError(pkt.ID, file.Fsetstat(attrs))
 				} else {
 					rpkt = attrs.call(rs.Handlers, pkt, rs.pktMgr.alloc, orderID, rs.maxTxPacket)
 				}
