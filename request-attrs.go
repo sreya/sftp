@@ -2,7 +2,7 @@ package sftp
 
 // Methods on the Request object to make working with the Flags bitmasks and
 // Attr(ibutes) byte blob easier. Use Pflags() when working with an Open/Write
-// request and AttrFlags() and Attributes() when working with SetStat requests.
+// request and AttrFlags() and Attributes() for Open and Setstat attributes.
 
 // FileOpenFlags defines Open and Write Flags. Correlate directly with with os.OpenFile flags
 // (https://golang.org/pkg/os/#pkg-constants).
@@ -29,7 +29,7 @@ func (r *Request) Pflags() FileOpenFlags {
 
 // FileAttrFlags that indicate whether SFTP file attributes were passed. When a flag is
 // true the corresponding attribute should be available from the FileStat
-// object returned by Attributes method. Used with SetStat.
+// object returned by Attributes method.
 type FileAttrFlags struct {
 	Size, UidGid, Permissions, Acmodtime bool
 }
@@ -44,14 +44,22 @@ func newFileAttrFlags(flags uint32) FileAttrFlags {
 }
 
 // AttrFlags returns a FileAttrFlags boolean struct based on the
-// bitmap/uint32 file attribute flags from the SFTP packaet.
+// bitmap/uint32 file attribute flags from the SFTP packet. For OPEN, these
+// are independent of the access flags returned by Pflags.
 func (r *Request) AttrFlags() FileAttrFlags {
-	return newFileAttrFlags(r.Flags)
+	return newFileAttrFlags(r.attributeFlags())
 }
 
 // Attributes parses file attributes byte blob and return them in a
 // FileStat object.
 func (r *Request) Attributes() *FileStat {
-	fs, _, _ := unmarshalFileStat(r.Flags, r.Attrs)
+	fs, _, _ := unmarshalFileStat(r.attributeFlags(), r.Attrs)
 	return fs
+}
+
+func (r *Request) attributeFlags() uint32 {
+	if r.hasAttrFlags {
+		return r.attrFlags
+	}
+	return r.Flags
 }

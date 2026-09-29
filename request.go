@@ -148,6 +148,10 @@ type Request struct {
 	Target   string // for renames and sym-links
 	handle   string
 
+	// OPEN has separate access and attribute masks. Flags keeps the access mask.
+	attrFlags    uint32
+	hasAttrFlags bool
+
 	// reader/writer/readdir from handlers
 	state
 
@@ -169,12 +173,14 @@ func NewRequest(method, path string) *Request {
 // because we have to copy around the mutex in state.
 func (r *Request) copy() *Request {
 	return &Request{
-		Method:   r.Method,
-		Filepath: r.Filepath,
-		Flags:    r.Flags,
-		Attrs:    r.Attrs,
-		Target:   r.Target,
-		handle:   r.handle,
+		Method:       r.Method,
+		Filepath:     r.Filepath,
+		Flags:        r.Flags,
+		Attrs:        r.Attrs,
+		Target:       r.Target,
+		handle:       r.handle,
+		attrFlags:    r.attrFlags,
+		hasAttrFlags: r.hasAttrFlags,
 
 		state: r.state.copy(),
 
@@ -194,6 +200,8 @@ func requestFromPacket(ctx context.Context, pkt hasPath, baseDir string) *Reques
 	switch p := pkt.(type) {
 	case *sshFxpOpenPacket:
 		request.Flags = p.Pflags
+		request.attrFlags = p.Flags
+		request.hasAttrFlags = true
 		request.Attrs = p.Attrs.([]byte)
 	case *sshFxpSetstatPacket:
 		request.Flags = p.Flags

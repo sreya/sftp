@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -67,4 +68,44 @@ func TestRequestAttributesEmpty(t *testing.T) {
 		Extended: []StatExtended{},
 	}, fs)
 	assert.Empty(t, b)
+}
+
+func TestRequestOpenAttributes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		flags uint32
+		attrs FileStat
+	}{
+		{name: "Absent"},
+		{name: "ModeZero", flags: sshFileXferAttrPermissions},
+		{name: "Mode0600", flags: sshFileXferAttrPermissions, attrs: FileStat{Mode: 0600}},
+		{name: "Mixed", flags: sshFileXferAttrSize | sshFileXferAttrUIDGID | sshFileXferAttrPermissions | sshFileXferAttrACmodTime,
+			attrs: FileStat{Size: 123, UID: 4, GID: 5, Mode: 0640, Atime: 10, Mtime: 20}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			access := uint32(sshFxfRead | sshFxfWrite | sshFxfAppend | sshFxfCreat)
+			r := requestFromPacket(context.Background(), &sshFxpOpenPacket{
+				Path: "file", Pflags: access, Flags: tc.flags,
+				Attrs: marshalFileStat(nil, tc.flags, &tc.attrs),
+			}, "/")
+			t.Cleanup(r.cancelCtx)
+			for _, request := range []*Request{r, r.WithContext(context.Background())} {
+				require.Equal(t, access, request.Flags)
+				require.Equal(t, newFileOpenFlags(access), request.Pflags())
+				require.Equal(t, newFileAttrFlags(tc.flags), request.AttrFlags())
+				require.Equal(t, &tc.attrs, request.Attributes())
+			}
+		})
+	}
+}
+
+func TestRequestManualAttributesCompatibility(t *testing.T) {
+	t.Parallel()
+	attrs := FileStat{Mode: 0600}
+	r := &Request{Method: "Setstat", Flags: sshFileXferAttrPermissions,
+		Attrs: marshalFileStat(nil, sshFileXferAttrPermissions, &attrs)}
+	require.True(t, r.AttrFlags().Permissions)
+	require.Equal(t, &attrs, r.Attributes())
 }
