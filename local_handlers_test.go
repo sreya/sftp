@@ -269,3 +269,35 @@ func TestLocalHandlersDirectoryOffsets(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first, buf[0].Name())
 }
+
+func TestLocalHandlersPathNormalizationDifference(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix symlink path resolution")
+	}
+	dir := t.TempDir()
+	left, right := filepath.Join(dir, "left"), filepath.Join(dir, "right")
+	require.NoError(t, os.MkdirAll(filepath.Join(right, "nested"), 0700))
+	require.NoError(t, os.Mkdir(left, 0700))
+	require.NoError(t, os.Symlink(filepath.Join(right, "nested"), filepath.Join(left, "link")))
+	require.NoError(t, os.WriteFile(filepath.Join(left, "file"), []byte("lexical"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(right, "file"), []byte("native"), 0600))
+	name := filepath.ToSlash(left) + "/link/../file"
+	for _, tc := range []struct {
+		name   string
+		client *Client
+		want   string
+	}{
+		{"Server", newLocalServerTestClient(t, dir), "native"},
+		{"RequestServer", newLocalRequestTestClient(t, NewLocalHandlers(), WithStartDirectory(dir)), "lexical"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file, err := tc.client.Open(name)
+			require.NoError(t, err)
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(data))
+		})
+	}
+}
