@@ -169,16 +169,29 @@ func netPipe(t testing.TB) (io.ReadWriteCloser, io.ReadWriteCloser) {
 func testClientGoSvr(t testing.TB, readonly bool, delay time.Duration, opts ...ClientOption) (*Client, *exec.Cmd) {
 	c1, c2 := netPipe(t)
 
-	options := []ServerOption{WithDebug(os.Stderr)}
-	if readonly {
-		options = append(options, ReadOnly())
-	}
+	if *testLocalHandlers {
+		if readonly {
+			t.Skip("RequestServer has no read-only option")
+		}
+		// Resolve relative paths like Server, which uses the working directory.
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := NewRequestServer(c1, NewLocalHandlers(), WithStartDirectory(wd))
+		go server.Serve()
+	} else {
+		options := []ServerOption{WithDebug(os.Stderr)}
+		if readonly {
+			options = append(options, ReadOnly())
+		}
 
-	server, err := NewServer(c1, options...)
-	if err != nil {
-		t.Fatal(err)
+		server, err := NewServer(c1, options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go server.Serve()
 	}
-	go server.Serve()
 
 	var wr io.WriteCloser = c2
 	if delay > NODELAY {

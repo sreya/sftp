@@ -70,6 +70,7 @@ func skipIfPlan9(t testing.TB) {
 }
 
 var testServerImpl = flag.Bool("testserver", false, "perform integration tests against sftp package server instance")
+var testLocalHandlers = flag.Bool("testlocalhandlers", false, "with -testserver, use a RequestServer with NewLocalHandlers")
 var testIntegration = flag.Bool("integration", false, "perform integration tests against sftp server process")
 var testAllocator = flag.Bool("allocator", false, "perform tests using the allocator")
 var testSftp *string
